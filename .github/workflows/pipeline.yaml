@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [16, 18]
+        node: [18, 20]
 
     steps:
       - name: Checkout code
@@ -42,7 +42,7 @@ jobs:
       - name: Security audit (high+)
         run: npm audit --audit-level=high
 
-  docker:
+  docker_build_and_smoke:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
@@ -50,20 +50,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image
+      - name: Build Docker image (with cache)
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
-          tags: devops-pipelines:ci
+          tags: devops-pipelines:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Run tests inside container
-        run: docker run --rm devops-pipelines:ci npm test
+      - name: Smoke test container (HTTP)
+        run: |
+          docker run -d --rm -p 8080:8080 --name app devops-pipelines:${{ github.sha }}
+          sleep 5
+          curl -f http://localhost:8080/health || exit 1
+          docker logs app | tail -n 50
+          docker stop app
 
   publish:
-    needs: [ test, docker ]
+    needs: [ test, docker_build_and_smoke ]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
 
@@ -88,5 +96,6 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/janislejnieks2/devops-pipelines:latest
-
+          tags: |
+            ghcr.io/janislejnieks2/devops-pipelines:latest
+            ghcr.io/janislejnieks2/devops-pipelines:sha-${{ github.sha }}
